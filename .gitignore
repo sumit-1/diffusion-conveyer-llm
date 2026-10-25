@@ -1,0 +1,24 @@
+# Python bytecode & packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
+venv/
+
+# Large raw datasets & binary memmaps (keep compact tokenizer & 256-story val sample)
+data/tinystories/TinyStories*.txt
+data/tinystories/tinystories_*.txt
+data/tinystories/tokenizer_v3_*.json
+data/tinystories/*.bin
+data/tinystories/*.tmp
+data/synthetic/
+
+# Large model checkpoints (hosted on Hugging Face Hub: sumitk/diffusion-conveyer-llm)
+runs/**/*.pt
+runs/**/*.pt.prev
+runs/**/*.pt.tmp
+runs/**/*.pt.dl

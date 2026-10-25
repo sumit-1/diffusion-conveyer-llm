@@ -1,0 +1,53 @@
+model:
+  vocab_size: 128
+  d_model: 256
+  n_heads: 4
+  n_layers: 6
+  d_ff: 688
+  max_seq_len: 512
+  dropout: 0.0
+  belt_size: 64
+  tau_min: 0.5
+  tau_max: 4.0
+  tau_gamma: 1.5
+  gate_bias_init: 1.0
+  spawn_noise_std: 0.5
+  thought_noise_std: 0.25
+  use_thought_highway: true
+  causal_belt_only: false
+
+train:
+  out_dir: "runs/synthetic"
+  seed: 42
+  batch_size: 64
+  lr: 0.0005
+  weight_decay: 0.01
+  grad_clip: 1.0
+  max_steps: 1200
+  warmup_steps: 80
+  eval_every: 100
+  log_every: 25
+  unroll_steps: 16
+  seed_sigma_max: 3.5
+  seed_sigma_eta: 1.25
+  loss_w_min: 0.05
+  loss_w_beta: 1.5
+  entropy_reg: 0.001
+  no_belt_bptt: false
+  no_thought_highway: false
+  ar_baseline: false
+
+infer:
+  prompt_overlap: 16
+  bake_steps: 64
+  temperature: 0.0
+  max_new_tokens: 64
+
+data:
+  dataset: "synthetic"
+  task: "all"
+  seq_len: 128
+  num_train: 24000
+  num_val: 1024
+  data_dir: "data/synthetic"
+  vocab_size: 128

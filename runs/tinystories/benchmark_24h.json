@@ -1,0 +1,311 @@
+{
+  "step": 122743,
+  "crystallization": {
+    "slot0_ce": 1.437141352891922,
+    "slot0_ppl": 4.208647566158646,
+    "slot0_acc": 0.6439453363418579,
+    "causal_lm_ce": 1.2504938185214995,
+    "causal_lm_ppl": 3.492066979102496,
+    "causal_lm_acc": 0.6677703201770783,
+    "mean_plan_pause": 0.05949237179011106,
+    "per_slot_acc": [
+      0.6439453363418579,
+      0.47968751192092896,
+      0.3623046875,
+      0.2783203125,
+      0.21230469644069672,
+      0.16660156846046448,
+      0.13750000298023224,
+      0.11640625447034836,
+      0.10468750447034836,
+      0.09746094048023224,
+      0.09121093899011612,
+      0.08476562798023224,
+      0.08730468899011612,
+      0.08632812649011612,
+      0.08242187649011612,
+      0.07988281548023224,
+      0.080078125,
+      0.07539062947034836,
+      0.07421875,
+      0.07148437947034836,
+      0.06894531100988388,
+      0.07500000298023224,
+      0.07011719048023224,
+      0.07050781697034836,
+      0.06992187350988388,
+      0.07265625149011612,
+      0.0712890625,
+      0.07070312649011612,
+      0.07089843600988388,
+      0.06972656399011612,
+      0.06972656399011612,
+      0.07050781697034836,
+      0.06953125447034836,
+      0.0703125,
+      0.07109375298023224,
+      0.06972656399011612,
+      0.06875000149011612,
+      0.06914062798023224,
+      0.0732683315873146,
+      0.07192770391702652,
+      0.07155468314886093,
+      0.07182707637548447,
+      0.07598132640123367,
+      0.07604477554559708,
+      0.07479842752218246,
+      0.07520607113838196,
+      0.07187029719352722,
+      0.076015405356884,
+      0.07749485969543457,
+      0.07287924736738205,
+      0.07080724090337753,
+      0.0724722370505333,
+      0.07274691760540009,
+      0.07342890650033951,
+      0.07258143275976181,
+      0.07091822475194931,
+      0.06911274045705795,
+      0.0738527923822403,
+      0.07288306951522827,
+      0.07187815755605698,
+      0.07096120715141296,
+      0.06949564069509506,
+      0.07068412005901337,
+      0.07690208405256271
+    ],
+    "per_slot_entropy": [
+      0.4764425456523895,
+      0.7842304706573486,
+      1.137978434562683,
+      1.49298095703125,
+      1.8444280624389648,
+      2.1730051040649414,
+      2.450309991836548,
+      2.708646535873413,
+      2.9538815021514893,
+      3.1541783809661865,
+      3.3763020038604736,
+      3.5716769695281982,
+      3.7822368144989014,
+      4.006913661956787,
+      4.228540897369385,
+      4.45133113861084,
+      4.690694332122803,
+      4.9508562088012695,
+      5.177692890167236,
+      5.426706314086914,
+      5.657607555389404,
+      5.869189262390137,
+      6.065157413482666,
+      6.2689208984375,
+      6.427663326263428,
+      6.592019557952881,
+      6.739131450653076,
+      6.870829105377197,
+      6.988106727600098,
+      7.094132900238037,
+      7.1884074211120605,
+      7.283900737762451,
+      7.358842372894287,
+      7.436470031738281,
+      7.50555944442749,
+      7.568306922912598,
+      7.623337745666504,
+      7.672909736633301,
+      7.717443943023682,
+      7.758584499359131,
+      7.795356273651123,
+      7.8370866775512695,
+      7.8670549392700195,
+      7.894341945648193,
+      7.925351619720459,
+      7.947883605957031,
+      7.97347354888916,
+      7.992164134979248,
+      8.013349533081055,
+      8.032417297363281,
+      8.046835899353027,
+      8.063529014587402,
+      8.078781127929688,
+      8.092826843261719,
+      8.105636596679688,
+      8.117079734802246,
+      8.127867698669434,
+      8.138626098632812,
+      8.147955894470215,
+      8.156766891479492,
+      8.16491985321045,
+      8.171956062316895,
+      8.17918586730957,
+      8.18935775756836
+    ]
+  },
+  "commonsense": {
+    "commonsense_lm_acc": 1.0,
+    "commonsense_slot0_acc": 0.8125,
+    "mean_logprob_margin": 2.5752472206950188,
+    "num_pairs": 16,
+    "details": [
+      {
+        "category": "emotion_cause",
+        "correct": true,
+        "logprob_good": -1.046,
+        "logprob_bad": -3.206
+      },
+      {
+        "category": "emotion_cause",
+        "correct": true,
+        "logprob_good": -0.773,
+        "logprob_bad": -5.345
+      },
+      {
+        "category": "physical_weight",
+        "correct": true,
+        "logprob_good": -1.497,
+        "logprob_bad": -3.835
+      },
+      {
+        "category": "physical_temperature",
+        "correct": true,
+        "logprob_good": -0.876,
+        "logprob_bad": -3.949
+      },
+      {
+        "category": "physical_temperature",
+        "correct": true,
+        "logprob_good": -2.276,
+        "logprob_bad": -5.165
+      },
+      {
+        "category": "physical_fragile",
+        "correct": true,
+        "logprob_good": -1.173,
+        "logprob_bad": -4.762
+      },
+      {
+        "category": "object_use",
+        "correct": true,
+        "logprob_good": -3.329,
+        "logprob_bad": -3.461
+      },
+      {
+        "category": "object_use",
+        "correct": true,
+        "logprob_good": -1.659,
+        "logprob_bad": -3.931
+      },
+      {
+        "category": "biological_need",
+        "correct": true,
+        "logprob_good": -1.334,
+        "logprob_bad": -3.579
+      },
+      {
+        "category": "biological_need",
+        "correct": true,
+        "logprob_good": -2.743,
+        "logprob_bad": -2.972
+      },
+      {
+        "category": "entity_tracking",
+        "correct": true,
+        "logprob_good": -0.955,
+        "logprob_bad": -5.76
+      },
+      {
+        "category": "entity_tracking",
+        "correct": true,
+        "logprob_good": -2.175,
+        "logprob_bad": -5.094
+      },
+      {
+        "category": "danger_reaction",
+        "correct": true,
+        "logprob_good": -0.906,
+        "logprob_bad": -5.322
+      },
+      {
+        "category": "social_repair",
+        "correct": true,
+        "logprob_good": -1.188,
+        "logprob_bad": -4.079
+      },
+      {
+        "category": "spatial_logic",
+        "correct": true,
+        "logprob_good": -1.458,
+        "logprob_bad": -3.383
+      },
+      {
+        "category": "weather_visibility",
+        "correct": true,
+        "logprob_good": -1.864,
+        "logprob_bad": -2.612
+      }
+    ]
+  },
+  "generation_quality": {
+    "prefix_word_order_kl": 3.6741719245910645,
+    "distinct_2": 0.7803174059310821,
+    "distinct_3": 0.8672925871374969,
+    "repeat_4gram_rate": 0.09066065924220516,
+    "prompt_entity_retention": 1.0,
+    "samples": [
+      {
+        "prompt": "Once upon a time, Lily and a little bunny walked into the green forest to find the golden key near the locked treasure chest. Suddenly a big lion",
+        "continuation": "appeared and roared, \"I'm the king of the forest!\" Lily was scared and said, \"No, you can't! I'm the king of the forest!\" The lion roared, \"I'm the king of the forest! I'm the king of the forest!\" Lily was very scared and said, \"Please, I, I'm the king of the forest!\" The lion said, \""
+      },
+      {
+        "prompt": "Once upon a time, there was a little robot named Beep who lived in a noisy workshop. One rainy morning, Beep found a tiny lost kitten by the door. Beep",
+        "continuation": "said, \"Oh no, little kitten! I need to help you find your home.\" The kitten was scared and said, \"Please,, I am lost. Can you help me?\" Beep thought for a moment and said, \"Yes, I will help you. Let's go find your home together.\" They walked and walked until they found a's house. The kitten was so happy and"
+      },
+      {
+        "prompt": "Sam and his sister Mia built a huge sandcastle on the beach near the waves. Suddenly, a big wave splashed toward their castle. Sam quickly",
+        "continuation": "ran to the sand and and shouted, \"Look, Mia! A huge wave!\" Mia was and said, \"Let's go it!\" Sam ran to the sand and and they both ran to the sand.. They laughed and shouted as they made the sandcastle bigger and bigger. Suddenly, a huge wave came and and the sand was gone. Sam and Mia were sad. They looked around and"
+      },
+      {
+        "prompt": "In a quiet village, an old baker dropped his round loaf of bread and it rolled out the door down the hill. A hungry puppy saw the bread and",
+        "continuation": "ran to it. He barked and wagged his tail, but the puppy was too fast. He stamped his paws and ran away. The puppy chased and ran until he was far away. He was so tired that he couldn't see the.. He was to to the the puppy and he was to to the.. But the puppy was too fast and"
+      },
+      {
+        "prompt": "Lucy had a box of bright crayons, but she could not find the blue crayon to color the sky. She looked under her bed and",
+        "continuation": "in her toy box, but it was not there. She asked her mom, \"Mom, where is my blue crayon?\" Her mom said, \"I don't know, Lucy. Maybe it's in the living room.\" So went to the living room and looked around. She saw the crayon on the table, but it was not there. She looked to the living room,"
+      },
+      {
+        "prompt": "One winter day, Max made a snowman in the yard with a carrot nose. When the warm sun came out in the afternoon, the snowman began to",
+        "continuation": "melt. Max was so sad. He ran to his mom and said, \"Mommy, my snowman is gone!\" His mom smiled and said, \"Don't worry, Max. We can make a new snowman for you.\" Max smiled and and his mom got some supplies. They put them  the snowman in the snowman and added a"
+      }
+    ]
+  },
+  "closed_loop": [
+    {
+      "bake_steps": 16,
+      "prompt_overlap": 0,
+      "first_token_acc": 0.1875,
+      "token_acc": 0.032552083333333336,
+      "exact_seq_acc": 0.0
+    },
+    {
+      "bake_steps": 16,
+      "prompt_overlap": 10,
+      "first_token_acc": 0.0,
+      "token_acc": 0.026041666666666668,
+      "exact_seq_acc": 0.0
+    },
+    {
+      "bake_steps": 64,
+      "prompt_overlap": 0,
+      "first_token_acc": 0.65625,
+      "token_acc": 0.15104166666666666,
+      "exact_seq_acc": 0.0
+    },
+    {
+      "bake_steps": 64,
+      "prompt_overlap": 10,
+      "first_token_acc": 0.6875,
+      "token_acc": 0.15755208333333334,
+      "exact_seq_acc": 0.0
+    }
+  ]
+}

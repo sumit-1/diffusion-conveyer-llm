@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diffusion-conveyer-llm"
+version = "0.1.0"
+description = "64-Slot Dual-Channel Conveyor-Belt Diffusion Language Model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4.0",
+    "numpy>=1.26.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66.0",
+    "tokenizers>=0.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+conveyer-train = "conveyer.train:main"
+conveyer-eval = "conveyer.eval:main"
+conveyer-infer = "conveyer.infer:main"
+conveyer-sweep = "conveyer.sweep:main"
+conveyer-live = "conveyer.live:main"
+conveyer-web = "conveyer.web_sim:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
