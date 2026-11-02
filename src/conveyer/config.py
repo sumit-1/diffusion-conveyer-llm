@@ -22,18 +22,21 @@ class ModelConfig:
     dropout: float = 0.0
     rope_theta: float = 10000.0
     # Conveyor belt parameters
-    belt_size: int = 64
-    front_conveyer_slots: int = 16  # Slots 0..15 shift left by 1 every tick; Slots 16..63 (75%) are Elastic Planning Zone
-    plan_horizon_stride: int = 2    # Back 75% planning slots span 2x longer horizon while sentences expand in middle
+    belt_size: int = 96
+    front_conveyer_slots: int = 5   # Last 5 slots (0..4) develop stopwords/grammar filling; Slots 5..95 are Content Dough Balls!
+    duplex_k_slots: int = 4         # Number of content-only conveyer slots stacked per tick in Duplex-SimMT frame
+    plan_horizon_stride: int = 2    # Back planning slots span 2x longer horizon while sentences expand in middle
     tau_min: float = 0.5
-    tau_max: float = 4.0
-    tau_gamma: float = 1.5
+    tau_max: float = 1.0
+    tau_gamma: float = 1.0
     gate_bias_init: float = 1.0
     spawn_noise_std: float = 0.5
     thought_noise_std: float = 0.25
     # Ablation & efficiency switches
     use_thought_highway: bool = True
-    use_elastic_planning: bool = True  # Enables 75% paused/elastic planning belt with mid-belt expansion
+    use_elastic_planning: bool = True  # Enables paused/elastic planning belt with mid-belt expansion
+    use_thought_reservoir: bool = True # Content-only conveyer (strips stopwords/punctuation)
+    use_duplex_frame: bool = True      # Stacks [prefill+generated text (prev_t)] + [content conveyer slots] via Duplex-SimMT frame
     causal_belt_only: bool = False     # If True, disables bidirectional belt attention (AR baseline mode)
     grad_checkpointing: bool = False   # Enables activation checkpointing for long unroll horizons (U=24..32)
 

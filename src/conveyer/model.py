@@ -289,6 +289,14 @@ class ConveyerDiffusionLM(nn.Module):
         # paused 75% planning zone and the moving 25% front conveyor
         self.expand_head = nn.Linear(2 * cfg.d_model, cfg.d_model, bias=False)
 
+        # Duplex-SimMT Frame Stacking (https://github.com/sumit-1/duplex-simmt-en-de):
+        # Stacks [prefill+generated text token] + [content-only conveyer slots (k_slots)] into a single frame:
+        #   frame_t = dough_norm( duplex_slot_proj(concat_k src_emb(conveyer_slots[t, k])) + tok_emb(prev_t) )
+        self.duplex_k_slots = max(1, int(getattr(cfg, "duplex_k_slots", 4)))
+        self.duplex_slot_proj = nn.Linear(self.duplex_k_slots * cfg.d_model, cfg.d_model, bias=False)
+        # Also projects active content-conveyer dough states into Slot 0 so the conveyer directly drives generation
+        self.conveyer_to_frame = nn.Linear(2 * cfg.d_model, cfg.d_model, bias=False)
+
         # Precompute positional temperature schedule tau_k, thought mixing alpha_k, and target horizon offsets
         B = cfg.belt_size
         F_slots = self.front_slots
@@ -298,25 +306,28 @@ class ConveyerDiffusionLM(nn.Module):
         alpha_schedule = ratio.clone()  # alpha_0 = 0.0, alpha_{B-1} = 1.0
 
         # Target sequence offsets delta_k from current tick t:
-        # - Front slots k = 0 .. F-1 map 1-to-1 to immediate tokens t + k
-        # - Back 75% planning slots k = F .. B-1 span a wider lookahead horizon (stride >= 1)
+        # - Front slots k = 0 .. F-1 (e.g. Last 5 slots 0..4) map 1-to-1 to immediate full-vocab tokens t + k
+        # - Back content conveyer slots k = F .. B-1 (e.g. Slots 5..95) map to the ordered stream of content dough balls
         stride = max(1, cfg.plan_horizon_stride) if cfg.use_elastic_planning else 1
         target_offsets = torch.arange(B, dtype=torch.long)
         if B > F_slots and stride > 1:
             back_idx = torch.arange(B - F_slots, dtype=torch.long)
             target_offsets[F_slots:] = F_slots + back_idx * stride
 
-        # Prior bias for shift_head: front slots always shift (+6.0), back 75% slots default to ~0.35 shift (65% pause)
+        # Prior bias for shift_head:
+        # - Front 5 slots (0..4) always shift by 1 every tick (+6.0 -> s_k = 1.0)
+        # - Content dough-ball conveyer (Slots 5..95) rolls forward at ~55%-70% speed (matching the ~1.9x content-to-full-token ratio!)
         shift_prior = torch.zeros(B, dtype=torch.float32)
         shift_prior[:F_slots] = 6.0
         if B > F_slots:
             back_ratio = torch.linspace(0.0, 1.0, B - F_slots)
-            shift_prior[F_slots:] = -0.3 - 1.2 * back_ratio  # sigmoid(-0.3..-1.5) ~ 0.42 down to 0.18
+            shift_prior[F_slots:] = 0.8 - 0.8 * back_ratio  # sigmoid(+0.8 .. 0.0) = 69% -> 50% rolling shift!
 
         self.register_buffer("tau_schedule", tau_schedule, persistent=False)
         self.register_buffer("alpha_schedule", alpha_schedule, persistent=False)
         self.register_buffer("target_offsets", target_offsets, persistent=False)
         self.register_buffer("shift_prior", shift_prior, persistent=False)
+        self.register_buffer("content_vocab_mask", torch.ones(cfg.vocab_size, dtype=torch.bool), persistent=False)
 
         self._init_weights()
 
@@ -352,13 +363,74 @@ class ConveyerDiffusionLM(nn.Module):
             dtype=dtype,
         )
 
+    def extract_duplex_conveyer_slots(self, seq_tokens: torch.Tensor) -> torch.Tensor:
+        """
+        CAUSAL extraction of the K=`duplex_k_slots` most recent content words up to and including position `t`
+        (`seq_tokens[:, :t+1]`) so the Duplex-SimMT frame at tick `t` NEVER leaks future targets `>= t+1`!
+        Returns `(bsz, seq_len, duplex_k_slots)` long tensor.
+        """
+        bsz, seq_len = seq_tokens.shape
+        device = seq_tokens.device
+        K = self.duplex_k_slots
+        if bool(self.content_vocab_mask.all()):
+            idx = (torch.arange(seq_len, device=device).unsqueeze(1) - torch.arange(0, K, device=device).unsqueeze(0)).clamp(min=0)
+            return torch.gather(seq_tokens, 1, idx.unsqueeze(0).expand(bsz, -1, -1))
+
+        is_c = self.content_vocab_mask[seq_tokens]  # (bsz, seq_len)
+        if seq_len > 1:
+            not_dup = torch.ones_like(is_c)
+            not_dup[:, 1:] = seq_tokens[:, 1:] != seq_tokens[:, :-1]
+            is_c = is_c & not_dup
+
+        # Causal backward window of W=28 tokens at or before position t (t - W + 1 .. t)
+        W = min(28, seq_len)
+        t_idx = torch.arange(seq_len, device=device).unsqueeze(1)   # (L, 1)
+        w_off = torch.arange(0, W, device=device).unsqueeze(0)      # (1, W): 0 = t, 1 = t-1, ...
+        win_pos = (t_idx - w_off).clamp(min=0)                      # (L, W)
+        in_bounds = (t_idx - w_off) >= 0                            # (L, W)
+
+        win_toks = seq_tokens[:, win_pos]                           # (bsz, L, W)
+        win_c = is_c[:, win_pos] & in_bounds.unsqueeze(0)           # (bsz, L, W)
+        priority = torch.arange(W, 0, -1, device=device).view(1, 1, W)
+        scores = torch.where(win_c, priority, torch.full_like(priority, -1))
+        k_take = min(K, W)
+        top_scores, top_i = scores.topk(k_take, dim=-1, largest=True, sorted=True)  # (bsz, L, k_take)
+        chosen = torch.gather(win_toks, -1, top_i)
+        chosen = torch.where(top_scores > 0, chosen, torch.zeros_like(chosen))
+        if k_take < K:
+            pad_z = torch.zeros((bsz, seq_len, K - k_take), dtype=torch.long, device=device)
+            chosen = torch.cat([chosen, pad_z], dim=-1)
+        return chosen
+
+    def embed_duplex_frame(
+        self,
+        token_ids: torch.Tensor,
+        conveyer_slot_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Duplex-SimMT Frame Embedding (https://github.com/sumit-1/duplex-simmt-en-de):
+          `frame_t = dough_norm( duplex_slot_proj(concat_k tok_emb(conveyer_slots[t, k])) + tok_emb(token_ids[t]) + slot0_bias )`
+        Stacks the prefill/generated text stream (`token_ids`) with the content-only conveyer (`conveyer_slot_ids`).
+        """
+        slot0_bias = self.slot_emb.weight[0].view(1, 1, -1)
+        tgt_e = self.tok_emb(token_ids) + slot0_bias  # (bsz, L, D)
+        if not getattr(self.cfg, "use_duplex_frame", False):
+            return self.dough_norm(tgt_e)
+        if conveyer_slot_ids is None:
+            conveyer_slot_ids = self.extract_duplex_conveyer_slots(token_ids)
+        bsz, seq_len, K = conveyer_slot_ids.shape
+        src_e = self.tok_emb(conveyer_slot_ids).reshape(bsz, seq_len, K * self.d_model)
+        return self.dough_norm(self.duplex_slot_proj(src_e) + tgt_e)
+
     def prefill_prefix(
         self,
         prefix_tokens: torch.Tensor,
         kv_cache: Optional[PrefixKVCache] = None,
+        conveyer_slot_ids: Optional[torch.Tensor] = None,
     ) -> PrefixKVCache:
         """
-        Encodes committed prefix tokens x_{t_start .. t_end} into the causal PrefixKVCache.
+        Encodes committed prefix tokens x_{t_start .. t_end} (stacked with Duplex-SimMT conveyer slots)
+        into the causal PrefixKVCache.
         prefix_tokens: (N, P) long tensor.
         """
         bsz, plen = prefix_tokens.shape
@@ -372,8 +444,7 @@ class ConveyerDiffusionLM(nn.Module):
         positions = torch.arange(start_pos, start_pos + plen, device=device, dtype=torch.long)
         cos, sin = self.rope.get_cos_sin(positions)
 
-        slot0_bias = self.slot_emb.weight[0].view(1, 1, -1)
-        x = self.dough_norm(self.tok_emb(prefix_tokens) + slot0_bias)
+        x = self.embed_duplex_frame(prefix_tokens, conveyer_slot_ids=conveyer_slot_ids)
 
         total_k = start_pos + plen
         use_is_causal = start_pos == 0 and plen > 1
@@ -420,7 +491,7 @@ class ConveyerDiffusionLM(nn.Module):
         cos, sin = self.rope.get_cos_sin(positions)
 
         slot0_bias = self.slot_emb.weight[0].view(1, 1, -1)
-        x = self.dough_norm(self.tok_emb(seq_tokens) + slot0_bias)
+        x = self.embed_duplex_frame(seq_tokens)
 
         k_list: list[torch.Tensor] = []
         v_list: list[torch.Tensor] = []
@@ -447,10 +518,22 @@ class ConveyerDiffusionLM(nn.Module):
         self,
         token_ids: torch.Tensor,
         kv_cache: PrefixKVCache,
+        belt: Optional[BeltState] = None,
+        committed_seq: Optional[torch.Tensor] = None,
     ) -> PrefixKVCache:
         if token_ids.dim() == 1:
             token_ids = token_ids.unsqueeze(1)
-        return self.prefill_prefix(token_ids, kv_cache=kv_cache)
+        conveyer_slot_ids: Optional[torch.Tensor] = None
+        if getattr(self.cfg, "use_duplex_frame", False):
+            if committed_seq is not None:
+                full_slots = self.extract_duplex_conveyer_slots(committed_seq)
+                conveyer_slot_ids = full_slots[:, -token_ids.size(1) :, :]
+            elif belt is not None and belt.logits is not None:
+                K = self.duplex_k_slots
+                F_slots = min(self.front_slots, belt.logits.size(1))
+                if belt.logits.size(1) >= F_slots + K:
+                    conveyer_slot_ids = belt.logits[:, F_slots : F_slots + K, :].argmax(dim=-1).unsqueeze(1)
+        return self.prefill_prefix(token_ids, kv_cache=kv_cache, conveyer_slot_ids=conveyer_slot_ids)
 
     def spawn_raw_dough(
         self,
@@ -498,6 +581,17 @@ class ConveyerDiffusionLM(nn.Module):
             fused = e_soft + alpha * m_thought + s_emb
         else:
             fused = e_soft + s_emb
+
+        # Duplex-SimMT Stacking on the Belt:
+        # Stack the content-only conveyer (`Slots F_slots : F_slots + K`) directly into the Front Articulation
+        # slots (`Slots 0 .. F_slots - 1`) via `duplex_slot_proj`, so the conveyer decides the generated output!
+        F_slots = min(self.front_slots, B)
+        K = self.duplex_k_slots
+        if getattr(self.cfg, "use_duplex_frame", False) and B >= F_slots + K:
+            conv_slots = e_soft[:, F_slots : F_slots + K, :].reshape(e_soft.size(0), 1, K * self.d_model)
+            conv_drive = self.duplex_slot_proj(conv_slots)  # (N, 1, D)
+            front_fused = fused[:, :F_slots, :] + conv_drive
+            fused = torch.cat([front_fused, fused[:, F_slots:, :]], dim=1)
 
         return self.dough_norm(fused)
 
@@ -562,6 +656,11 @@ class ConveyerDiffusionLM(nn.Module):
 
         # Channel 1: Lexical Anchor (Soft Probability Projection)
         logits = self.lm_head(h)  # (N, B, V)
+        F_slots = min(self.front_slots, B)
+        if getattr(self.cfg, "use_thought_reservoir", False) and B > F_slots:
+            non_content = ~self.content_vocab_mask.view(1, 1, -1)
+            res_logits = logits[:, F_slots:, :].masked_fill(non_content, -1e9)
+            logits = torch.cat([logits[:, :F_slots, :], res_logits], dim=1)
         tau = self.tau_schedule[:B].view(1, B, 1).type_as(logits)
         probs = F.softmax((logits / tau).float(), dim=-1).type_as(self.tok_emb.weight)
         e_soft = torch.matmul(probs, self.tok_emb.weight)  # (N, B, D)
@@ -576,20 +675,42 @@ class ConveyerDiffusionLM(nn.Module):
             m_updated = torch.zeros_like(m_prev)
 
         # Elastic Planning Shift/Pause Gate & Mid-Belt Sentence Expansion
-        F_slots = min(self.front_slots, B)
         if self.cfg.use_elastic_planning and B > F_slots:
             prior = self.shift_prior[:B].view(1, B).type_as(h)
             raw_shift = self.shift_head(h).squeeze(-1) + prior  # (N, B)
             shift_prob = torch.sigmoid(raw_shift)
-            # Front conveyor slots (0 .. F-1) always shift left at full speed (1.0)
+            # Front conveyor slots (0 .. F-1, e.g. 0..4) always shift left at full speed (1.0)
             front_ones = torch.ones((h.size(0), F_slots), device=device, dtype=shift_prob.dtype)
             shift_prob = torch.cat([front_ones, shift_prob[:, F_slots:]], dim=1)
-            # Mid-belt expansion thought synthesized from the boundary between Front (F-1) and Planning (F)
+            # Mid-belt expansion thought synthesized from the boundary between Front (F-1) and Content Conveyer (F)
             boundary_pair = torch.cat([h[:, F_slots - 1, :], h[:, F_slots, :]], dim=-1)
             expand_cand = self.expand_head(boundary_pair)  # (N, D)
         else:
             shift_prob = torch.ones((h.size(0), B), device=device, dtype=h.dtype)
             expand_cand = h[:, -1, :]
+
+        # Duplex-SimMT Conveyer-Decides-Result Fusion at Slot 0:
+        # Fuses Slot 0's hidden state h[:, 0] with BOTH the incoming conveyer dough `belt.e_soft[:, F_slots : F_slots + K]`
+        # AND the refined conveyer dough `e_soft[:, F_slots : F_slots + K]` so any content word on the conveyer
+        # (including words injected into `belt.e_soft` at test time!) directly drives the generated token y_t!
+        K = self.duplex_k_slots
+        if getattr(self.cfg, "use_duplex_frame", False) and B >= F_slots + K:
+            conv_blend = 0.5 * belt.e_soft[:, F_slots : F_slots + K, :] + 0.5 * e_soft[:, F_slots : F_slots + K, :]
+            conv_summary = self.duplex_slot_proj(conv_blend.reshape(h.size(0), K * self.d_model))
+            h_slot0_fused = self.final_norm(h[:, 0, :] + self.conveyer_to_frame(torch.cat([h[:, 0, :], conv_summary], dim=-1)))
+            slot0_logits = self.lm_head(h_slot0_fused)
+            logits = torch.cat([slot0_logits.unsqueeze(1), logits[:, 1:, :]], dim=1)
+            # When the token emitted at Slot 0 is a content word that matches the head of the content conveyer (Slot F_slots),
+            # force the front of the content conveyer to shift left by 100% so that dough ball is consumed and the NEXT
+            # content word advances into Slot F_slots!
+            s0_top = slot0_logits.argmax(dim=-1)                # (N,)
+            cf_top = logits[:, F_slots, :].argmax(dim=-1)       # (N,)
+            is_s0_content = self.content_vocab_mask[s0_top]     # (N,)
+            consumed = (is_s0_content & (s0_top == cf_top)).unsqueeze(1)  # (N, 1)
+            advance_ones = torch.ones_like(shift_prob[:, F_slots:])
+            shift_prob = torch.cat([shift_prob[:, :F_slots], torch.where(consumed, advance_ones, shift_prob[:, F_slots:])], dim=1)
+        else:
+            slot0_logits = logits[:, 0, :]
 
         return BeltStepOutput(
             logits=logits,
@@ -600,7 +721,7 @@ class ConveyerDiffusionLM(nn.Module):
             m_updated=m_updated,
             shift_prob=shift_prob,
             expand_cand=expand_cand,
-            slot0_logits=logits[:, 0, :],
+            slot0_logits=slot0_logits,
         )
 
     def shift_belt_left(
@@ -670,12 +791,12 @@ class ConveyerDiffusionLM(nn.Module):
                 dim=1,
             )
         else:
-            # Elastic Two-Zone Update:
-            # (a) Front slots 0 .. F-2 shift strictly from 1 .. F-1
+            # Elastic Two-Zone Update (Rolling Content Dough Balls in F..B-1 -> Stopword/Grammar Filling in 0..F-1):
+            # (a) Front slots 0 .. F-2 (Slots 0..3) shift strictly from 1 .. F-1 (Slots 1..4)
             e_front = step_out.e_soft[:, 1:F_slots, :]
             m_front = step_out.m_updated[:, 1:F_slots, :]
 
-            # (b) Mid-Belt Expansion Slot (F-1): where paused back-belt plans expand into new active words
+            # (b) Mid-Belt Expansion Slot (F-1 = Slot 4): where content dough ball at Slot 5 expands with stopwords/grammar!
             s_mid = step_out.shift_prob[:, F_slots : F_slots + 1].unsqueeze(-1)  # (N, 1, 1)
             e_FromPlan = step_out.e_soft[:, F_slots : F_slots + 1, :]
             m_FromPlan = step_out.m_updated[:, F_slots : F_slots + 1, :]
@@ -683,7 +804,7 @@ class ConveyerDiffusionLM(nn.Module):
             e_mid = e_FromPlan
             m_mid = s_mid * m_FromPlan + (1.0 - s_mid) * m_expand
 
-            # (c) Back 75% Planning Slots (F .. B-2): elastic interpolation between staying (k) and shifting (k+1)
+            # (c) Content Dough-Ball Conveyer Slots (F .. B-2 = Slots 5..94): roll forward as predictions advance!
             s_back = step_out.shift_prob[:, F_slots : B - 1].unsqueeze(-1)  # (N, B - 1 - F, 1)
             e_stay = step_out.e_soft[:, F_slots : B - 1, :]
             e_adv = step_out.e_soft[:, F_slots + 1 : B, :]
@@ -693,7 +814,7 @@ class ConveyerDiffusionLM(nn.Module):
             m_adv = step_out.m_updated[:, F_slots + 1 : B, :]
             m_back = s_back * m_adv + (1.0 - s_back) * m_stay
 
-            # (d) Slot B-1 (Tail of planning belt): elastic blend between holding Slot B-1 and fresh raw dough
+            # (d) Slot B-1 (Slot 95, Tail of content conveyer): blends fresh raw dough ball into the tail
             s_tail = step_out.shift_prob[:, B - 1 : B].unsqueeze(-1)
             e_tail = s_tail * e_spawn + (1.0 - s_tail) * step_out.e_soft[:, B - 1 : B, :]
             m_tail = s_tail * m_spawn + (1.0 - s_tail) * step_out.m_updated[:, B - 1 : B, :]

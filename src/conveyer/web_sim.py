@@ -322,15 +322,15 @@ HTML_PAGE = """<!DOCTYPE html>
       <input type="text" id="promptInput" onkeydown="if(event.key==='Enter'){runGenerate(-1);}" value="Once upon a time, Lily and a little bunny walked into the green forest to find the golden key near the locked treasure chest. Suddenly a big lion" />
       <div class="knob">
         <span>Pre-Bake Overlap (W)</span>
-        <input type="number" id="overlapInput" value="12" min="0" max="60" />
+        <input type="number" id="overlapInput" value="16" min="0" max="60" />
       </div>
       <div class="knob">
         <span>Oven Slots (B)</span>
-        <input type="number" id="bakeInput" value="64" min="1" max="64" />
+        <input type="number" id="bakeInput" value="96" min="1" max="96" />
       </div>
       <div class="knob">
         <span>Generate Tokens</span>
-        <input type="number" id="tokensInput" value="32" min="6" max="64" />
+        <input type="number" id="tokensInput" value="64" min="6" max="200" />
       </div>
       <div class="knob">
         <span>Temp (&tau;)</span>
@@ -771,14 +771,19 @@ def main() -> None:
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    repo_root = Path(__file__).resolve().parents[2]
     ckpt_path = args.ckpt
     if ckpt_path is None:
         if Path("runs/tinystories/best.pt").exists():
             ckpt_path = "runs/tinystories/best.pt"
+        elif (repo_root / "runs/tinystories/best.pt").exists():
+            ckpt_path = str(repo_root / "runs/tinystories/best.pt")
         elif Path("runs/synthetic/best.pt").exists():
             ckpt_path = "runs/synthetic/best.pt"
+        elif (repo_root / "runs/synthetic/best.pt").exists():
+            ckpt_path = str(repo_root / "runs/synthetic/best.pt")
         else:
-            ckpt_path = "runs/tinystories/best.pt"
+            ckpt_path = str(repo_root / "runs/tinystories/best.pt")
 
     try:
         model, cfg, ckpt_meta = load_checkpoint(ckpt_path, device=device)
@@ -789,6 +794,8 @@ def main() -> None:
         ckpt_meta = {}
 
     _, val_ds, tokenizer = build_dataset_and_tokenizer(cfg, infer_only=True)
+    if hasattr(tokenizer, "content_vocab_mask"):
+        model.content_vocab_mask.copy_(getattr(tokenizer, "content_vocab_mask").to(device))
     app = ConveyerWebApp(
         model=model,
         cfg=cfg,
@@ -806,9 +813,9 @@ def main() -> None:
                 qs = parse_qs(parsed.query)
                 prompt_text = qs.get("prompt", [None])[0]
                 sample_idx = int(qs.get("sample", ["0"])[0])
-                overlap = int(qs.get("overlap", ["12"])[0])
-                bake_steps = int(qs.get("bake_steps", ["64"])[0])
-                tokens = int(qs.get("tokens", ["32"])[0])
+                overlap = int(qs.get("overlap", ["16"])[0])
+                bake_steps = int(qs.get("bake_steps", [str(model.belt_size)])[0])
+                tokens = int(qs.get("tokens", ["64"])[0])
                 temp = float(qs.get("temp", ["0.0"])[0])
                 payload = json.dumps(
                     app.compute_trace(prompt_text, sample_idx, overlap, bake_steps, tokens, temperature=temp)

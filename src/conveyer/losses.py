@@ -41,22 +41,60 @@ def gather_belt_targets(
     tick: int,
     offsets: torch.Tensor,
     pad_token_id: int = 0,
+    use_thought_reservoir: bool = False,
+    front_slots: int = 16,
+    content_vocab_mask: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Gathers target tokens `x_{tick + offsets[k]}` for each belt slot `k = 0..B-1`:
-      - Front 25% Conveyor Slots (k = 0 .. F-1): `offsets[k] = k` (immediate token stream `t + k`)
-      - Back 75% Planning Slots (k = F .. B-1): `offsets[k] = F + (k - F) * stride` (longer-range sentence plan!)
+    Gathers target tokens for each belt slot `k = 0..B-1`:
+      - Front 25% Articulation Slots (k = 0 .. F-1): `offsets[k] = k` (immediate token stream `t + k`)
+      - Back 75% (k = F .. B-1):
+          * If `use_thought_reservoir=True`: 4-Register English Thought Reservoir (content words only!)
+          * Otherwise: Conveyor Planning Slots `offsets[k] = F + (k - F) * stride`
     Returns `(targets, in_bounds_mask)` of shape `(N, B)`.
     """
     bsz, seq_len = seq_tokens.shape
     device = seq_tokens.device
+    B = offsets.size(0)
     pos = tick + offsets.to(device)  # (B,)
     in_bounds = (pos >= 0) & (pos < seq_len)  # (B,)
     clamped_pos = pos.clamp(min=0, max=seq_len - 1).unsqueeze(0).expand(bsz, -1)  # (N, B)
     gathered = torch.gather(seq_tokens, dim=1, index=clamped_pos)
     pad_tensor = torch.full_like(gathered, pad_token_id)
     targets = torch.where(in_bounds.unsqueeze(0), gathered, pad_tensor)
-    return targets, in_bounds.unsqueeze(0).expand(bsz, -1)
+    valid_mask = in_bounds.unsqueeze(0).expand(bsz, -1).clone()
+
+    if use_thought_reservoir and content_vocab_mask is not None and B > front_slots:
+        targets[:, front_slots:] = pad_token_id
+        valid_mask[:, front_slots:] = False
+        is_c = content_vocab_mask[seq_tokens]  # (N, seq_len)
+        # Exclude immediate adjacent duplicate tokens on GPU before ranking
+        not_adj_dup = torch.ones_like(is_c)
+        if seq_len > 1:
+            not_adj_dup[:, 1:] = seq_tokens[:, 1:] != seq_tokens[:, :-1]
+        is_c = is_c & not_adj_dup
+
+        # Moving Content-Word Conveyer (Slots front_slots .. B-1 = Slots 5..95):
+        # Takes the ordered sequence of upcoming content words starting at `tick + front_slots`!
+        # As `tick` advances and content words enter the Last-5 Stopword/Grammar Zone (`0..4`),
+        # every content dough ball on the conveyer naturally rolls left toward Slot 0!
+        tok_start = min(seq_len, tick + front_slots)
+        res_slots = min(B - front_slots, seq_len - tok_start)
+        if res_slots > 0:
+            sub_toks = seq_tokens[:, tok_start:]  # (N, L_rem)
+            sub_c = is_c[:, tok_start:]           # (N, L_rem)
+            L_rem = sub_toks.size(1)
+            idx_score = torch.arange(L_rem, 0, -1, device=device).unsqueeze(0)
+            scores = torch.where(sub_c, idx_score, torch.full_like(idx_score, -1))
+            top_scores, top_idx = scores.topk(res_slots, dim=1, largest=True, sorted=True)
+            chosen_toks = torch.gather(sub_toks, 1, top_idx)
+            chosen_valid = top_scores > 0
+            targets[:, front_slots : front_slots + res_slots] = torch.where(
+                chosen_valid, chosen_toks, torch.full_like(chosen_toks, pad_token_id)
+            )
+            valid_mask[:, front_slots : front_slots + res_slots] = chosen_valid
+
+    return targets, valid_mask
 
 
 def seed_corrupted_belt(
@@ -105,6 +143,8 @@ def seed_corrupted_belt(
         offsets = model.get_slot_target_offsets(active_slots=B).to(device)
         pos = tick_start + offsets.unsqueeze(0)  # (1, B)
         is_prompt = pos < prompt_lengths.unsqueeze(1)  # (N, B)
+        if getattr(model.cfg, "use_thought_reservoir", False) and B > model.front_slots:
+            is_prompt[:, model.front_slots :] = False
         prompt_emb = model.tok_emb(target_tokens.clamp(min=0, max=V - 1))
         e_soft = torch.where(is_prompt.unsqueeze(-1), prompt_emb, e_soft)
 
@@ -214,8 +254,17 @@ def compute_unrolled_conveyer_loss(
         prefix_lm_loss = torch.tensor(0.0, device=device)
         prefix_lm_acc_t = torch.tensor(0.0, device=device)
 
-    # 2. Seed initial 64-slot belt at tick_start using slot target offsets
-    init_targets, _ = gather_belt_targets(seq_tokens, tick_start, offsets, pad_token_id=pad_token_id)
+    # 2. Seed initial 64-slot belt at tick_start using slot target offsets / English Thought Reservoir
+    use_res = getattr(cfg.model, "use_thought_reservoir", False)
+    init_targets, _ = gather_belt_targets(
+        seq_tokens,
+        tick_start,
+        offsets,
+        pad_token_id=pad_token_id,
+        use_thought_reservoir=use_res,
+        front_slots=F_slots,
+        content_vocab_mask=model.content_vocab_mask if use_res else None,
+    )
 
     belt = seed_corrupted_belt(
         model=model,
@@ -255,7 +304,15 @@ def compute_unrolled_conveyer_loss(
         if t >= seq_len:
             break
 
-        targets, in_bounds = gather_belt_targets(seq_tokens, t, offsets, pad_token_id=pad_token_id)
+        targets, in_bounds = gather_belt_targets(
+            seq_tokens,
+            t,
+            offsets,
+            pad_token_id=pad_token_id,
+            use_thought_reservoir=use_res,
+            front_slots=F_slots,
+            content_vocab_mask=model.content_vocab_mask if use_res else None,
+        )
         slot_positions = t + offsets.to(device).unsqueeze(0)  # (1, B)
 
         # Mid-unroll Belt Recovery Training: occasionally inject wrong/noisy thoughts onto the belt
@@ -270,11 +327,34 @@ def compute_unrolled_conveyer_loss(
                     prompt_mask=p_mask,
                 )
 
+        if use_res and B > F_slots and model.training:
+            # Conveyer Teacher-Forced Steering (25% of ticks):
+            # Clamp the true upcoming content words onto `belt.e_soft[:, F_slots : F_slots + 8]` so the model
+            # explicitly learns that whatever content word sits on `belt.e_soft[:, F_slots:]` MUST be preserved
+            # and emitted into the story within the next few ticks!
+            if torch.rand(()) < 0.25:
+                K_clamp = min(8, B - F_slots)
+                c_emb = model.tok_emb(targets[:, F_slots : F_slots + K_clamp].clamp(min=0, max=model.vocab_size - 1))
+                c_valid = (targets[:, F_slots : F_slots + K_clamp] != pad_token_id).unsqueeze(-1)
+                e_mod = belt.e_soft.clone()
+                e_mod[:, F_slots : F_slots + K_clamp, :] = torch.where(c_valid, c_emb, e_mod[:, F_slots : F_slots + K_clamp, :])
+                belt = BeltState(
+                    e_soft=e_mod,
+                    m_thought=belt.m_thought,
+                    tick=belt.tick,
+                    probs=belt.probs,
+                    logits=belt.logits,
+                    gates=belt.gates,
+                    shift_probs=belt.shift_probs,
+                )
+
         step_out = model.forward_belt(belt=belt, kv_cache=kv_cache)
 
         valid_mask = in_bounds & (targets != pad_token_id)  # (N, B)
         if prompt_lengths is not None:
             is_gen = slot_positions >= prompt_lengths.unsqueeze(1)
+            if use_res and B > F_slots:
+                is_gen[:, F_slots:] = True
             valid_mask = valid_mask & is_gen
 
         if cfg.model.causal_belt_only:
@@ -288,13 +368,36 @@ def compute_unrolled_conveyer_loss(
             reduction="none",
         ).view(bsz, B)
 
-        w_broadcast = horizon_w.unsqueeze(0) * valid_mask.float()
-        w_denom = w_broadcast.sum().clamp(min=1e-6)
-        tick_ce_loss = (ce_per_token * w_broadcast).sum() / w_denom
+        if use_res and B > F_slots:
+            # Explicit Dual Supervision + Adjacent-Slot Exclusivity Repulsion:
+            #   1. Last 5 Stopword/Grammar Filling Slots (0..F_slots-1): predicts full-vocab tokens y_t .. y_{t+4}
+            #   2. Rolling Content Dough-Ball Conveyer (F_slots..B-1): horizon-weighted over upcoming content words
+            #   3. Adjacent-Slot Exclusivity Penalty: penalizes neighboring content slots (k, k+1, k+2) for putting
+            #      probability mass on the same content word, preventing ['bunny', 'bunny', 'bunny'] mode collapse!
+            front_w = horizon_w[:F_slots].unsqueeze(0) * valid_mask[:, :F_slots].float()
+            front_ce = (ce_per_token[:, :F_slots] * front_w).sum() / front_w.sum().clamp(min=1e-6)
+            conv_w = horizon_w[F_slots:].unsqueeze(0) * valid_mask[:, F_slots:].float()
+            conv_ce = (ce_per_token[:, F_slots:] * conv_w).sum() / conv_w.sum().clamp(min=1e-6)
+
+            c_probs = step_out.probs[:, F_slots : min(B, F_slots + 32), :].float()
+            rep_1 = (c_probs[:, :-1, :] * c_probs[:, 1:, :]).sum(dim=-1).mean()
+            rep_2 = (c_probs[:, :-2, :] * c_probs[:, 2:, :]).sum(dim=-1).mean()
+            rep_loss = rep_1 + 0.5 * rep_2
+
+            # Supervise shift_prob on content conveyer to match whether current target token at Slot 0 is a content word!
+            s0_is_c = model.content_vocab_mask[targets[:, 0]].float().unsqueeze(1)  # (N, 1)
+            target_s = 0.25 + 0.65 * s0_is_c  # 0.90 shift when consuming a content word, 0.25 when emitting a stopword
+            shift_mse = (step_out.shift_prob[:, F_slots : min(B, F_slots + 16)].float() - target_s).pow(2).mean()
+
+            tick_ce_loss = front_ce + 0.65 * conv_ce + 2.5 * rep_loss + 0.5 * shift_mse
+        else:
+            w_broadcast = horizon_w.unsqueeze(0) * valid_mask.float()
+            w_denom = w_broadcast.sum().clamp(min=1e-6)
+            tick_ce_loss = (ce_per_token * w_broadcast).sum() / w_denom
 
         probs_clamped = step_out.probs.clamp(min=1e-8)
         entropy = -(probs_clamped * probs_clamped.log()).sum(dim=-1)
-        if cfg.train.entropy_reg > 0.0 and not cfg.model.causal_belt_only:
+        if cfg.train.entropy_reg > 0.0 and not cfg.model.causal_belt_only and not use_res:
             back_weights = (torch.arange(B, device=device, dtype=torch.float32) / max(B - 1, 1)).unsqueeze(0)
             ent_bonus = (entropy * back_weights * valid_mask.float()).sum() / valid_mask.float().sum().clamp(min=1.0)
             tick_loss = tick_ce_loss - cfg.train.entropy_reg * ent_bonus
@@ -364,12 +467,22 @@ def compute_unrolled_conveyer_loss(
             else:
                 if not use_dagger:
                     committed_x_t = seq_tokens[:, t]
-                kv_cache = model.append_committed_token(committed_x_t, kv_cache)
+                kv_cache = model.append_committed_token(committed_x_t, kv_cache, belt=belt)
 
-            next_targets, _ = gather_belt_targets(seq_tokens, t + 1, offsets, pad_token_id=pad_token_id)
+            next_targets, _ = gather_belt_targets(
+                seq_tokens,
+                t + 1,
+                offsets,
+                pad_token_id=pad_token_id,
+                use_thought_reservoir=use_res,
+                front_slots=F_slots,
+                content_vocab_mask=model.content_vocab_mask if use_res else None,
+            )
             if prompt_lengths is not None:
                 next_pos = (t + 1) + offsets.to(device).unsqueeze(0)
                 clamp_mask = next_pos < prompt_lengths.unsqueeze(1)
+                if use_res and B > F_slots:
+                    clamp_mask[:, F_slots:] = False
             else:
                 clamp_mask = None
 

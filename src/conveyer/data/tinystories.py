@@ -58,6 +58,20 @@ class TiktokenCompactTokenizer:
             if 0 <= gid < self.enc.n_vocab:
                 self._lut[gid] = cid
 
+        # Prebuild boolean mask of English content words (nouns, verbs, adjectives, names) for the Thought Reservoir
+        stopwords = {
+            "the", "and", "a", "to", "was", "in", "on", "of", "for", "with", "that", "is", "at", "be", "are",
+            "as", "by", "an", "or", "from", "it", "this", "were", "had", "have", "has", "did", "so", "up", "out",
+            "he", "she", "his", "her", "him", "they", "their", "them", "you", "your", "we", "our", "its", "but",
+            "not", "very", "too", "all", "one", "there", "when", "then", "what", "who", "how", "can", "will",
+            "would", "could", "should", "about", "into", "over", "after", "before", "once", "upon", "time",
+        }
+        self.content_vocab_mask = torch.zeros(self.vocab_size, dtype=torch.bool)
+        for cid in range(260, self.vocab_size):
+            piece = self.id_to_piece(cid).strip().lower()
+            if len(piece) >= 2 and piece.isalpha() and piece not in stopwords:
+                self.content_vocab_mask[cid] = True
+
     @classmethod
     def build_from_texts(cls, texts: list[str], vocab_size: int = 4096) -> "TiktokenCompactTokenizer":
         enc = tiktoken.get_encoding("gpt2")
@@ -208,17 +222,17 @@ class TiktokenCompactTokenizer:
 def _download_with_resume(url: str, dest: Path, min_expected_bytes: int = 1_000_000) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     existing = dest.stat().st_size if dest.exists() else 0
+    if existing >= min_expected_bytes:
+        return dest
     total_size = 0
     try:
         req_head = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req_head, timeout=30) as r:
+        with urllib.request.urlopen(req_head, timeout=15) as r:
             total_size = int(r.headers.get("Content-Length", 0))
     except Exception:
         total_size = 0
 
     if total_size > 0 and existing >= total_size:
-        return dest
-    if total_size == 0 and existing >= min_expected_bytes:
         return dest
 
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -458,6 +472,13 @@ def build_tinystories_datasets(
     infer_only: bool = False,
 ) -> tuple[TinyStoriesDataset, TinyStoriesDataset, TiktokenCompactTokenizer]:
     data_dir = Path(cfg.data.data_dir)
+    repo_root = Path(__file__).resolve().parents[3]
+    if (
+        not data_dir.is_absolute()
+        and not (data_dir / f"tiktoken_compact_{cfg.data.vocab_size}.json").exists()
+        and (repo_root / data_dir / f"tiktoken_compact_{cfg.data.vocab_size}.json").exists()
+    ):
+        data_dir = repo_root / data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
     tok_path = data_dir / f"tiktoken_compact_{cfg.data.vocab_size}.json"
     val_sample_path = data_dir / "val_sample_256.txt"

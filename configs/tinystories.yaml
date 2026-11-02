@@ -6,17 +6,20 @@ model:
   d_ff: 1408
   max_seq_len: 512
   dropout: 0.0
-  belt_size: 64
-  front_conveyer_slots: 16
+  belt_size: 96
+  front_conveyer_slots: 5
+  duplex_k_slots: 4
   plan_horizon_stride: 2
   tau_min: 0.5
-  tau_max: 4.0
-  tau_gamma: 1.5
+  tau_max: 1.5
+  tau_gamma: 1.25
   gate_bias_init: 1.0
   spawn_noise_std: 0.5
   thought_noise_std: 0.25
   use_thought_highway: true
   use_elastic_planning: true
+  use_thought_reservoir: true
+  use_duplex_frame: true
   causal_belt_only: false
   grad_checkpointing: false
 
@@ -27,7 +30,7 @@ train:
   lr: 0.0005
   weight_decay: 0.01
   grad_clip: 1.0
-  max_steps: 130000
+  max_steps: 200000
   max_hours: 24.0
   warmup_steps: 1500
   eval_every: 500
@@ -50,14 +53,14 @@ train:
 
 infer:
   prompt_overlap: 12
-  bake_steps: 64
+  bake_steps: 96
   temperature: 0.0
-  max_new_tokens: 48
+  max_new_tokens: 64
 
 data:
   dataset: "tinystories"
   task: "lm"
-  seq_len: 160
+  seq_len: 256
   num_train: 2000000
   num_val: 10000
   data_dir: "data/tinystories"

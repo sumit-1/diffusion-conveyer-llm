@@ -123,21 +123,29 @@ def _sample_preview(
     tokenizer: TokenizerProtocol,
     device: torch.device,
     prompt_text: str,
-    max_new_tokens: int = 32,
+    max_new_tokens: int = 200,
+    injected_word: Optional[str] = None,
 ) -> str:
     model.eval()
     p_ids = torch.tensor([tokenizer.encode(prompt_text.strip())], dtype=torch.long, device=device)
+    inj_ids: Optional[list[int]] = None
+    if injected_word is not None:
+        enc_w = tokenizer.encode(" " + injected_word.strip())[1:]  # skip <BOS>
+        if enc_w:
+            inj_ids = (enc_w * 8)[:8]
     out_ids, _ = generate_conveyer(
         model=model,
         prompt_tokens=p_ids,
         max_new_tokens=max_new_tokens,
-        prompt_overlap=10,
+        prompt_overlap=16,
         temperature=0.0,
         eos_token_id=tokenizer.eos_id,
+        injected_conveyer_tokens=inj_ids,
     )
     gen_part = tokenizer.decode(out_ids[0, p_ids.size(1) :].tolist())
     model.train()
-    return gen_part.replace("\n", " ").strip()
+    clean = gen_part.replace("\n", " ").replace("\ufffd", "").strip()
+    return clean.encode("ascii", errors="ignore").decode("ascii")
 
 
 def _sanitize_jsonl(log_path: Path) -> None:
@@ -180,6 +188,8 @@ def train_model(
     )
 
     model = ConveyerDiffusionLM(cfg.model).to(device)
+    if hasattr(tokenizer, "content_vocab_mask"):
+        model.content_vocab_mask.copy_(getattr(tokenizer, "content_vocab_mask").to(device))
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.train.lr,
@@ -214,9 +224,14 @@ def train_model(
                 except Exception as e:
                     print(f"[ConveyerTrain] Warning: could not restore optimizer state ({e})", flush=True)
             start_step = int(ckpt_data.get("step", 0)) + 1
-            best_val_loss = float(
-                ckpt_data.get("best_val_loss") or ckpt_data.get("metrics", {}).get("val_loss", float("inf"))
-            )
+            prev_cfg = ckpt_data.get("config", {}).get("model", {})
+            if getattr(cfg.model, "use_thought_reservoir", False) and not prev_cfg.get("use_thought_reservoir", False):
+                best_val_loss = float("inf")
+                print("[ConveyerTrain] Transitioning from Conveyor Belt to English Thought Reservoir mode; resetting best_val_loss.", flush=True)
+            else:
+                best_val_loss = float(
+                    ckpt_data.get("best_val_loss") or ckpt_data.get("metrics", {}).get("val_loss", float("inf"))
+                )
             prior_elapsed = float(ckpt_data.get("elapsed_sec", 0.0))
             print(
                 f"[ConveyerTrain] Resumed from {used_path} at step {start_step} "
@@ -241,9 +256,17 @@ def train_model(
         "1-Pass AR Baseline"
         if cfg.model.causal_belt_only
         else (
-            "64-Slot Conveyor (Soft-Vocab Only)"
-            if not cfg.model.use_thought_highway
-            else "64-Slot Dual-Channel Conveyor (Soft-Vocab + Gated Thought)"
+            f"{cfg.model.belt_size}-Slot Duplex-SimMT Content-Only Conveyer + Articulation (K={getattr(cfg.model, 'duplex_k_slots', 4)})"
+            if getattr(cfg.model, "use_thought_reservoir", False) and getattr(cfg.model, "use_duplex_frame", False)
+            else (
+                f"{cfg.model.belt_size}-Slot English Thought Reservoir (In-Place 4-Register + Front Articulation)"
+                if getattr(cfg.model, "use_thought_reservoir", False)
+                else (
+                    "64-Slot Conveyor (Soft-Vocab Only)"
+                    if not cfg.model.use_thought_highway
+                    else "64-Slot Dual-Channel Conveyor (Soft-Vocab + Gated Thought)"
+                )
+            )
         )
     )
     max_hours = float(getattr(cfg.train, "max_hours", 0.0))
@@ -360,10 +383,15 @@ def train_model(
                     "Once upon a time, Lily and a little bunny walked into the green forest "
                     "to find the golden key near the locked treasure chest. Suddenly a big lion"
                 )
-                preview = _sample_preview(model, tokenizer, device, sample_p, max_new_tokens=28)
-                print(f"    [SAMPLE] ...Suddenly a big lion -> {preview}", flush=True)
+                preview = _sample_preview(model, tokenizer, device, sample_p, max_new_tokens=200)
+                preview_dragon = _sample_preview(
+                    model, tokenizer, device, sample_p, max_new_tokens=200, injected_word="dragon"
+                )
+                print(f"    [SAMPLE 200t] ...Suddenly a big lion -> {preview}", flush=True)
+                print(f"    [DRAGON INJECT] ...Suddenly a big lion (+ 'dragon' in conveyer) -> {preview_dragon}", flush=True)
             else:
                 preview = ""
+                preview_dragon = ""
 
             if val_m["val_loss"] <= best_val_loss:
                 best_val_loss = val_m["val_loss"]
@@ -390,6 +418,7 @@ def train_model(
                 "val_lm_acc": round(val_m["val_lm_acc"], 4),
                 "val_belt_acc": round(val_m["val_belt_acc"], 4),
                 "sample_lion": preview,
+                "sample_dragon_conveyer": preview_dragon,
             }
             with open(log_jsonl, "a", encoding="utf-8") as lf:
                 lf.write(json.dumps(log_entry) + "\n")

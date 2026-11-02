@@ -269,7 +269,7 @@ def evaluate_prefix_sensitivity_and_generation_quality(
             model=model,
             prompt_tokens=p_true,
             max_new_tokens=max_new_tokens,
-            prompt_overlap=10,
+            prompt_overlap=16,
             temperature=0.0,
             eos_token_id=tokenizer.eos_id,
             deterministic_spawn=True,
@@ -450,6 +450,8 @@ def main() -> None:
 
     model, cfg, ckpt_meta = load_checkpoint(args.ckpt, device=device)
     _, val_ds, tokenizer = build_dataset_and_tokenizer(cfg)
+    if hasattr(tokenizer, "content_vocab_mask"):
+        model.content_vocab_mask.copy_(getattr(tokenizer, "content_vocab_mask").to(device))
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.train.batch_size,

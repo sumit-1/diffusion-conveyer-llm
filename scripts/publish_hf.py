@@ -23,10 +23,12 @@ def main() -> None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model, cfg, ckpt_meta = load_checkpoint("runs/tinystories/best.pt", device=device)
         _, val_ds, tokenizer = build_dataset_and_tokenizer(cfg, infer_only=True)
+        if hasattr(tokenizer, "content_vocab_mask"):
+            model.content_vocab_mask.copy_(getattr(tokenizer, "content_vocab_mask").to(device))
         app = ConveyerWebApp(
             model=model,
             cfg=cfg,
-            ckpt_path="runs/tinystories/best.pt (step 122,743 · 24h)",
+            ckpt_path="runs/tinystories/best.pt (step 105,500 · 24h · 96-slot Duplex Content Conveyer)",
             ckpt_meta=ckpt_meta,
             val_ds=val_ds,
             tokenizer=tokenizer,
@@ -41,7 +43,7 @@ def main() -> None:
             "In a quiet village, an old baker dropped his round loaf of bread and it rolled out the door down the hill. A hungry puppy saw the bread and",
         ]
         traces = {
-            p: app.compute_trace(p, 0, overlap=12, bake_steps=64, max_tokens=40, temperature=0.0)
+            p: app.compute_trace(p, 0, overlap=16, bake_steps=model.belt_size, max_tokens=48, temperature=0.0)
             for p in prompts
         }
 
@@ -94,8 +96,20 @@ def main() -> None:
         api.upload_file(path_or_fileobj=str(tp / "README.md"), path_in_repo="README.md", repo_id=repo_id, repo_type="space")
         api.upload_file(path_or_fileobj=str(tp / "index.html"), path_in_repo="index.html", repo_id=repo_id, repo_type="space")
 
+    # Also upload README.md, best.pt, and benchmark_24h.json to the Hugging Face model repo
+    api.upload_file(path_or_fileobj="README.md", path_in_repo="README.md", repo_id=repo_id, repo_type="model")
+    api.upload_file(path_or_fileobj="runs/tinystories/best.pt", path_in_repo="best.pt", repo_id=repo_id, repo_type="model")
+    if Path("runs/tinystories/benchmark_24h.json").exists():
+        api.upload_file(
+            path_or_fileobj="runs/tinystories/benchmark_24h.json",
+            path_in_repo="benchmark_24h.json",
+            repo_id=repo_id,
+            repo_type="model",
+        )
+
     traces_file.unlink(missing_ok=True)
     print(f"Published interactive Space: https://huggingface.co/spaces/{repo_id}")
+    print(f"Published Model Checkpoint : https://huggingface.co/{repo_id}")
 
 
 if __name__ == "__main__":
