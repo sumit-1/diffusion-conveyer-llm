@@ -25,6 +25,9 @@ An **experimental ~30M-parameter hybrid Autoregressive + Rolling-Conveyer Langua
   - **Hugging Face Live Space:** [`https://huggingface.co/spaces/sumitk/diffusion-conveyer-llm`](https://huggingface.co/spaces/sumitk/diffusion-conveyer-llm)
   - **Pretrained Checkpoint (`best.pt`):** [`https://huggingface.co/sumitk/diffusion-conveyer-llm`](https://huggingface.co/sumitk/diffusion-conveyer-llm)
 
+![96-Slot Rolling Conveyor-Belt Generation Demo](assets/conveyer_generation_demo.gif)
+*Tick-by-tick generation trace ([`assets/conveyer_generation_demo.mp4`](assets/conveyer_generation_demo.mp4)): Blue = Input Prompt, Green = Emitted from Slot 0, Middle = Last-5 Stopword/Grammar Filling Zone (`Slots 0..4`), Bottom = Content-Only Dough-Ball Conveyer (`Slots 5..95`) & "Dragon Injection" steering test.*
+
 ---
 
 ## What This Experiment Tests
